@@ -1,6 +1,7 @@
 import typing
 import platform
 import os
+import sys
 import multiprocessing
 import multiprocessing.pool
 
@@ -183,6 +184,9 @@ class Flight:
         """Returns true if the flight has the nessecary information for further analysis."""
         return (self.source is not None or self.destination is not None) and (
             self.actual_departure is not None or self.actual_arrival is not None)
+    
+    def __str__(self):
+        return "Flight [%s]: %s to %s. Duration: %s" % (self.name, self.source, self.destination, self.flight_time)
 
 
 class FlightPair(Printable):
@@ -257,6 +261,12 @@ class Aircraft(Printable):
             return self.type_code
         return ""
 
+    def __str__(self):
+        info = "Aircraft [%s]: %s (%s)" % (self.registration, self.type_name, self.type_code)
+        for flight in self.flights:
+            info += "\n" + str(flight)
+        return info
+
 
 class Airline(Printable):
     """The class representing an airline."""
@@ -302,7 +312,7 @@ def retrieve_page(url: str) -> BeautifulSoup:
     global CONTEXT
     try:
         CONTEXT.driver.get(url)
-        while CONTEXT.driver.page_source.find("Checking your browser before accessing") != -1:
+        while CONTEXT.driver.page_source.find('name="author" content="Flightradar24"') == -1:
             log("Bot protection triggered")
             sleep(1)
         return BeautifulSoup(CONTEXT.driver.page_source, "lxml")
@@ -317,7 +327,6 @@ def retrieve_airlines() -> typing.List[Airline]:
     airlines: typing.List[Airline] = []
     soup = retrieve_page(BASE_URL + "/data/airlines")
     data = soup.findAll("td", class_="notranslate")
-    count = 0
     for entry in data:
         name = clean_string(entry.a.string)
         link = entry.a["href"]
@@ -505,13 +514,16 @@ class NestablePool(multiprocessing.pool.Pool):
 
 
 if __name__ == "__main__":
+    processes = os.cpu_count()
+    if (len(sys.argv) == 2):
+        processes = int(sys.argv[1])
     manager = multiprocessing.Manager()
     drivers = manager.list()
     displays = manager.list()
     airports = manager.dict()
     data = []
     base_info = OrderedDict()
-    pool = NestablePool(initializer=initialize_context, initargs={drivers, displays, airports})
+    pool = NestablePool(processes=processes, initializer=initialize_context, initargs=[drivers, displays, airports])
     for header in HEADERS:
         base_info[header] = ""
     try:
@@ -522,9 +534,11 @@ if __name__ == "__main__":
                 # We capture the airline using a curried lambda to ensure the airline is correct when the callback is executed.
                 callback = (lambda airline: lambda aircraft: process_aircraft(data, base_info, airline, aircraft))(airline)
                 pool.apply_async(retrieve_aircraft_details, args={aircraft},
-                                 callback=callback)
+                                    callback=callback)
         pool.close()
         pool.join()
+    except:
+        traceback.print_exc()
     finally:
         pool.terminate()
         write_data(data)
